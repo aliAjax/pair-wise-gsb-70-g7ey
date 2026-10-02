@@ -24,6 +24,14 @@ export interface ContractChange {
   reviewer: string;
   reviewComment: string;
   reviewedAt?: string;
+  /** 审核依据：结论所基于的契约修订号 */
+  basisRevision?: number;
+  /** 审核依据：结论所基于的语义修订号（仅契约定义变化才推进） */
+  basisSemanticRevision?: number;
+  /** 审核依据：结论所基于的版本号 */
+  basisVersion?: string;
+  /** 结论固化进的正式版本，冻结后不再允许修改 */
+  frozenInVersion?: string;
 }
 
 export interface ApiConsumer {
@@ -43,6 +51,12 @@ export interface Exemption {
   reason: string;
   approvedBy: string;
   expiresAt: string;
+  /** 申请幂等键：同一请求重试不会重复生成豁免 */
+  requestId?: string;
+  /** 登记时依据的契约修订号 */
+  basisRevision?: number;
+  /** 豁免固化进的正式版本，冻结后不再允许修改 */
+  frozenInVersion?: string;
 }
 
 export interface ContractVersion {
@@ -50,10 +64,46 @@ export interface ContractVersion {
   contractId: string;
   version: string;
   releasedAt: string;
+  /** 冻结内容（OpenAPI 定义 + 变更 + 调用方 + 豁免）的校验值 */
   checksum: string;
   notes: string;
   changeIds: string[];
   openapi: string;
+  /** 冻结时固化的变更与评审结论（旧数据迁移时可能缺失，由 migrateVersion 补建） */
+  changes?: ContractChange[];
+  /** 冻结时固化的调用方清单 */
+  consumers?: ApiConsumer[];
+  /** 冻结时固化的豁免记录 */
+  exemptions?: Exemption[];
+  /** 冻结时工作副本的修订号 */
+  revision?: number;
+  /** 冻结时工作副本的语义修订号 */
+  semanticRevision?: number;
+  /** 该正式版本基于的上一版本 */
+  basisVersion?: string;
+  /** 旧数据迁移补建的快照，历史记录未随快照保存 */
+  migrated?: boolean;
+}
+
+export interface RevisionLog {
+  /** 单调递增的修订号，从 1 开始 */
+  revision: number;
+  at: string;
+  actor: string;
+  action:
+    | 'migrated'
+    | 'draft_save'
+    | 'openapi_edit'
+    | 'review'
+    | 'bulk_review'
+    | 'exemption'
+    | 'freeze'
+    | 'start_draft';
+  summary: string;
+  /** 本次修订基于的版本号 */
+  basisVersion?: string;
+  /** 幂等请求标识 */
+  requestId?: string;
 }
 
 export interface ApiContract {
@@ -70,6 +120,14 @@ export interface ApiContract {
   consumers: ApiConsumer[];
   exemptions: Exemption[];
   versions: ContractVersion[];
+  /** 当前工作副本修订号，每次被接收的写入 +1 */
+  revision: number;
+  /** 当前语义修订号：只有契约定义（OpenAPI 或变更前后描述）变化才推进，评审/豁免不推进 */
+  semanticRevision: number;
+  /** 工作副本依据的最新正式版本号（尚未发布过为空串） */
+  basisVersion: string;
+  /** 修订审计记录，供冲突方先查看对方变更 */
+  revisionLog: RevisionLog[];
 }
 
 export interface ReleaseIssue {
@@ -161,6 +219,10 @@ export function classifyChange(input: {
   }
 }
 
+/**
+ * 只检查变更本身的评审与迁移约束（与修订/冻结状态无关的部分）。
+ * 发布门禁的完整判定见 models/revision-engine.ts 的 releaseIssues。
+ */
 export function validateForRelease(contract: ApiContract): ReleaseIssue[] {
   const issues: ReleaseIssue[] = [];
   const pending = contract.changes.filter((change) => change.reviewState === 'pending');

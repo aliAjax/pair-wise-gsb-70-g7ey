@@ -29,6 +29,7 @@ interface QueueItem {
   contractId: string;
   contractName: string;
   version: string;
+  revision: number;
   updatedAt: string;
   change: ContractChange;
 }
@@ -45,6 +46,7 @@ export function ReviewQueuePage() {
   const [query, setQuery] = useState('');
   const [reviewer, setReviewer] = useState('当前评审人');
   const [comment, setComment] = useState('');
+  const [bulkError, setBulkError] = useState('');
 
   const queue = useMemo<QueueItem[]>(
     () =>
@@ -54,6 +56,7 @@ export function ReviewQueuePage() {
             contractId: contract.id,
             contractName: contract.name,
             version: contract.version,
+            revision: contract.revision,
             updatedAt: contract.updatedAt,
             change,
           })),
@@ -95,14 +98,29 @@ export function ReviewQueuePage() {
 
   async function submitBulk(state: ReviewState) {
     if (!selection.length || !comment.trim()) return;
-    await bulkReview.mutateAsync({
-      selections: selection,
-      state,
-      reviewer: reviewer.trim() || '当前评审人',
-      comment: comment.trim(),
+    const expectedRevisions: Record<string, number> = {};
+    (contracts.data ?? []).forEach((contract) => {
+      if (selection.some((item) => item.contractId === contract.id)) {
+        expectedRevisions[contract.id] = contract.revision;
+      }
     });
-    clearSelection();
-    setComment('');
+    try {
+      await bulkReview.mutateAsync({
+        selections: selection,
+        reviewState: state,
+        reviewer: reviewer.trim() || '当前评审人',
+        comment: comment.trim(),
+        expectedRevisions,
+      });
+      clearSelection();
+      setComment('');
+    } catch (error) {
+      setBulkError(
+        error instanceof Error
+          ? error.message
+          : '批量评审写入失败，已保留到待恢复批次，可在顶部重试。',
+      );
+    }
   }
 
   return (
@@ -190,6 +208,7 @@ export function ReviewQueuePage() {
                           {item.contractName}
                         </Link>
                         <Badge tone="neutral">v{item.version}</Badge>
+                        <Badge tone="slate">r{item.revision}</Badge>
                         <CompatibilityBadge value={item.change.compatibility} />
                         <ReviewStateBadge value={item.change.reviewState} />
                       </div>
@@ -264,6 +283,11 @@ export function ReviewQueuePage() {
                 清空选择
               </Button>
             </div>
+            {bulkError && (
+              <p className="mt-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs leading-5 text-red-700">
+                {bulkError}
+              </p>
+            )}
             <div className="mt-5 border-t border-slate-100 pt-4">
               <div className="flex items-center gap-2 text-xs text-slate-500">
                 <Filter className="h-3.5 w-3.5" />

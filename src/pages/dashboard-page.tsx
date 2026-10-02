@@ -111,8 +111,24 @@ export function DashboardPage() {
         consumers: [],
         exemptions: [],
         versions: [],
+        revision: 1,
+        semanticRevision: 1,
+        basisVersion: '',
+        revisionLog: [
+          {
+            revision: 1,
+            at: now,
+            actor: '当前用户',
+            action: 'draft_save',
+            summary: '导入 OpenAPI 文档创建草稿',
+          },
+        ],
       };
-      await saveContract.mutateAsync(contract);
+      await saveContract.mutateAsync({
+        contract,
+        expectedRevision: 1,
+        actor: '当前用户',
+      });
       setImportText('');
       setImportOpen(false);
       await navigate({ to: '/contracts/$contractId', params: { contractId: contract.id } });

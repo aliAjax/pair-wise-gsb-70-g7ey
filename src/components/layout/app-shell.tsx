@@ -8,6 +8,7 @@ import {
   PackageCheck,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { RecoveryCenter } from './recovery-center';
 
 const navigation = [
   { to: '/', label: '契约工作台', icon: LayoutDashboard, exact: true },
@@ -76,6 +77,7 @@ export function AppShell() {
               正式版本发布前执行兼容性门禁、调用方影响确认与迁移方案检查
             </div>
             <div className="flex items-center gap-2">
+              <RecoveryCenter />
               <span className="h-2 w-2 rounded-full bg-emerald-500" />
               <span className="text-xs text-slate-600">评审服务正常</span>
             </div>

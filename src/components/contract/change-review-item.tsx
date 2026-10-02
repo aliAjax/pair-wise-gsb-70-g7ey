@@ -1,4 +1,4 @@
-import { Check, CornerUpLeft, Layers3, Save } from 'lucide-react';
+import { Check, CornerUpLeft, Layers3, LockKeyhole, Save } from 'lucide-react';
 import { useState } from 'react';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -15,6 +15,9 @@ interface ChangeReviewItemProps {
   onReview: (changeId: string, state: ReviewState, comment: string) => void;
   onUpdate: (changeId: string, patch: Partial<ContractChange>) => void;
   onExemption: (changeId: string, reason: string) => void;
+  /** 已冻结的固化版本：变更、影响说明、豁免都只读 */
+  readOnly?: boolean;
+  saving?: boolean;
 }
 
 export function ChangeReviewItem({
@@ -22,6 +25,8 @@ export function ChangeReviewItem({
   onReview,
   onUpdate,
   onExemption,
+  readOnly = false,
+  saving = false,
 }: ChangeReviewItemProps) {
   const [comment, setComment] = useState(change.reviewComment);
   const [impact, setImpact] = useState(change.impactStatement);
@@ -50,6 +55,18 @@ export function ChangeReviewItem({
         <div className="text-left text-xs text-slate-500 lg:text-right">
           <div>评审人：{change.reviewer || '未指定'}</div>
           <div className="mt-1">结论：{change.reviewComment || '尚无意见'}</div>
+          {change.basisRevision !== undefined && (
+            <div className="mt-1 text-[10px] text-slate-400">
+              审核依据：r{change.basisRevision}
+              {change.basisVersion ? ` / v${change.basisVersion}` : ''}
+            </div>
+          )}
+          {change.frozenInVersion && (
+            <div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-slate-500 lg:justify-end">
+              <LockKeyhole className="h-3 w-3" />
+              已固化进 v{change.frozenInVersion}
+            </div>
+          )}
         </div>
       </div>
 
@@ -82,6 +99,7 @@ export function ChangeReviewItem({
               value={impact}
               onChange={(event) => setImpact(event.target.value)}
               placeholder="受影响调用方、版本、流量和业务影响"
+              readOnly={readOnly}
             />
           </div>
           <div>
@@ -90,6 +108,7 @@ export function ChangeReviewItem({
               value={migration}
               onChange={(event) => setMigration(event.target.value)}
               placeholder="升级顺序、兼容层范围、回滚和截止时间"
+              readOnly={readOnly}
             />
           </div>
         </div>
@@ -103,49 +122,61 @@ export function ChangeReviewItem({
             value={comment}
             onChange={(event) => setComment(event.target.value)}
             placeholder="说明接受、退回或豁免的依据"
+            readOnly={readOnly}
           />
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() =>
-              onUpdate(change.id, {
-                impactStatement: impact,
-                migrationPlan: migration,
-              })
-            }
-          >
-            <Save className="h-3.5 w-3.5" />
-            保存说明
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onReview(change.id, 'returned', comment || '需要补充影响说明')}
-          >
-            <CornerUpLeft className="h-3.5 w-3.5" />
-            退回
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setShowExemption((value) => !value)}
-          >
-            <Layers3 className="h-3.5 w-3.5" />
-            申请兼容层
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => onReview(change.id, 'accepted', comment || '影响和迁移方案已确认')}
-          >
-            <Check className="h-3.5 w-3.5" />
-            接受
-          </Button>
-        </div>
+        {readOnly ? (
+          <div className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+            <LockKeyhole className="h-3.5 w-3.5" />
+            固化内容只读，请基于新版本发起草稿
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={saving}
+              onClick={() =>
+                onUpdate(change.id, {
+                  impactStatement: impact,
+                  migrationPlan: migration,
+                })
+              }
+            >
+              <Save className="h-3.5 w-3.5" />
+              保存说明
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={saving}
+              onClick={() => onReview(change.id, 'returned', comment || '需要补充影响说明')}
+            >
+              <CornerUpLeft className="h-3.5 w-3.5" />
+              退回
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={saving}
+              onClick={() => setShowExemption((value) => !value)}
+            >
+              <Layers3 className="h-3.5 w-3.5" />
+              申请兼容层
+            </Button>
+            <Button
+              size="sm"
+              disabled={saving}
+              onClick={() => onReview(change.id, 'accepted', comment || '影响和迁移方案已确认')}
+            >
+              <Check className="h-3.5 w-3.5" />
+              接受
+            </Button>
+          </div>
+        )}
       </div>
 
-      {showExemption && (
+      {showExemption && !readOnly && (
         <div className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone="blue">兼容层豁免</Badge>

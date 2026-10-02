@@ -1,5 +1,6 @@
 import type { ApiContract, ChangeKind } from '../models/contract';
 import { classifyChange } from '../models/contract';
+import { migrateContract } from '../models/revision-engine';
 
 function openApi(
   title: string,
@@ -112,7 +113,10 @@ const userOpenApi = openApi('用户权限 API', '1.14.0', [
   },
 ]);
 
-export const seedContracts: ApiContract[] = [
+/** 演示种子的原始结构（尚未带修订号，加载时统一迁移） */
+type SeedContract = Omit<ApiContract, 'revision' | 'semanticRevision' | 'basisVersion' | 'revisionLog'>;
+
+const rawSeedContracts: SeedContract[] = [
   {
     id: 'contract-order',
     name: '订单履约 API',
@@ -339,3 +343,8 @@ export const seedContracts: ApiContract[] = [
     versions: [],
   },
 ];
+
+/** 演示种子：首次进入也走统一迁移，补齐修订号与审核依据 */
+export const seedContracts: ApiContract[] = rawSeedContracts
+  .map((contract) => migrateContract(contract))
+  .filter((contract): contract is ApiContract => contract !== null);

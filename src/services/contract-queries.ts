@@ -1,19 +1,34 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import type { ReviewState } from '../models/contract';
 import {
   addExemption,
-  bulkReviewChanges,
+  discardPendingWrite,
   freezeVersion,
   getContract,
   listContracts,
+  listPendingWrites,
+  replayPendingWrites,
   reviewChange,
   saveContract,
+  setFailNextWrites,
+  startNewDraft,
   updateContractOpenApi,
+  bulkReviewChanges,
+  type PendingWrite,
+  type SaveContractInput,
+  type ReviewInput,
+  type BulkReviewInput,
+  type UpdateOpenApiInput,
+  type ExemptionInput,
+  type FreezeInput,
+  type StartDraftInput,
 } from './contract-service';
 
 export const contractKeys = {
   all: ['contracts'] as const,
   detail: (id: string) => ['contracts', id] as const,
+  pending: ['pending-writes'] as const,
 };
 
 export function useContracts() {
@@ -31,23 +46,71 @@ export function useContract(id: string) {
   });
 }
 
+/** 跨标签页：任一标签页写入后，其它标签页自动刷新为当前修订 */
+function useStorageSync() {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    function onStorage(event: StorageEvent) {
+      if (event.key === 'pair-wise-gsb-70-contracts' || event.key === null) {
+        void queryClient.invalidateQueries({ queryKey: contractKeys.all });
+      }
+      if (event.key === 'pair-wise-gsb-70-write-meta' || event.key === null) {
+        void queryClient.invalidateQueries({ queryKey: contractKeys.pending });
+      }
+    }
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [queryClient]);
+}
+
+export function usePendingWrites() {
+  useStorageSync();
+  return useQuery({
+    queryKey: contractKeys.pending,
+    queryFn: async () => listPendingWrites(),
+    staleTime: 0,
+  });
+}
+
+export function useReplayPendingWrites() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => replayPendingWrites(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: contractKeys.all });
+      void queryClient.invalidateQueries({ queryKey: contractKeys.pending });
+    },
+  });
+}
+
+export function useDiscardPendingWrite() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      discardPendingWrite(id);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: contractKeys.pending });
+    },
+  });
+}
+
+export function useFailureInjection() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (enabled: boolean) => {
+      setFailNextWrites(enabled);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: contractKeys.pending });
+    },
+  });
+}
+
 export function useReviewChange() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: {
-      contractId: string;
-      changeId: string;
-      state: ReviewState;
-      reviewer: string;
-      comment: string;
-    }) =>
-      reviewChange(
-        input.contractId,
-        input.changeId,
-        input.state,
-        input.reviewer,
-        input.comment,
-      ),
+    mutationFn: (input: ReviewInput) => reviewChange(input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: contractKeys.all }),
   });
 }
@@ -55,18 +118,7 @@ export function useReviewChange() {
 export function useBulkReview() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: {
-      selections: Array<{ contractId: string; changeId: string }>;
-      state: ReviewState;
-      reviewer: string;
-      comment: string;
-    }) =>
-      bulkReviewChanges(
-        input.selections,
-        input.state,
-        input.reviewer,
-        input.comment,
-      ),
+    mutationFn: (input: BulkReviewInput) => bulkReviewChanges(input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: contractKeys.all }),
   });
 }
@@ -74,8 +126,7 @@ export function useBulkReview() {
 export function useUpdateOpenApi() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { contractId: string; openapi: string }) =>
-      updateContractOpenApi(input.contractId, input.openapi),
+    mutationFn: (input: UpdateOpenApiInput) => updateContractOpenApi(input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: contractKeys.all }),
   });
 }
@@ -83,7 +134,7 @@ export function useUpdateOpenApi() {
 export function useSaveContract() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: saveContract,
+    mutationFn: (input: SaveContractInput) => saveContract(input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: contractKeys.all }),
   });
 }
@@ -91,8 +142,7 @@ export function useSaveContract() {
 export function useAddExemption() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { contractId: string; changeId: string; reason: string }) =>
-      addExemption(input.contractId, input.changeId, input.reason),
+    mutationFn: (input: ExemptionInput) => addExemption(input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: contractKeys.all }),
   });
 }
@@ -100,8 +150,28 @@ export function useAddExemption() {
 export function useFreezeVersion() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { contractId: string; version: string; notes: string }) =>
-      freezeVersion(input.contractId, input.version, input.notes),
+    mutationFn: (input: FreezeInput) => freezeVersion(input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: contractKeys.all }),
   });
 }
+
+export function useStartNewDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: StartDraftInput) => startNewDraft(input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: contractKeys.all }),
+  });
+}
+
+// 保留原类型导出，方便页面引用
+export type {
+  BulkReviewInput,
+  ExemptionInput,
+  FreezeInput,
+  PendingWrite,
+  ReviewInput,
+  SaveContractInput,
+  StartDraftInput,
+  UpdateOpenApiInput,
+};
+export type { ReviewState };

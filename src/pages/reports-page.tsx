@@ -1,4 +1,4 @@
-import { Download, FileJson, FileText, ShieldCheck } from 'lucide-react';
+import { Download, FileJson, FileText, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { useMemo } from 'react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from '../components/ui/select';
 import { formatDateTime } from '../lib/utils';
+import { effectiveView } from '../models/revision-engine';
 import { buildChangeReport } from '../services/contract-service';
 import { useContracts } from '../services/contract-queries';
 import { useReviewStore } from '../store/review-store';
@@ -19,11 +20,17 @@ export function ReportsPage() {
   const contracts = useContracts();
   const selectedContractId = useReviewStore((state) => state.selectedContractId);
   const setSelectedContract = useReviewStore((state) => state.setSelectedContract);
-  const contract =
+  const working =
     (contracts.data ?? []).find((item) => item.id === selectedContractId) ??
     contracts.data?.[0];
 
-  const report = useMemo(() => (contract ? buildChangeReport(contract) : ''), [contract]);
+  const view = useMemo(() => (working ? effectiveView(working) : null), [working]);
+  const contract = view?.contract;
+
+  const report = useMemo(
+    () => (contract && working ? buildChangeReport(contract, working) : ''),
+    [contract, working],
+  );
   const reviewed = contract?.changes.filter((change) => change.reviewState !== 'pending') ?? [];
 
   return (
@@ -38,14 +45,14 @@ export function ReportsPage() {
             汇总接口差异、兼容性结论、调用方影响、迁移方案和兼容层豁免，供发布评审归档。
           </p>
         </div>
-        {contract && (
+        {contract && working && (
           <div className="flex gap-2">
             <Button
               variant="secondary"
               onClick={() =>
                 downloadText(
-                  `${contract.id}-${contract.version}.json`,
-                  JSON.stringify(contract, null, 2),
+                  `${working.id}-${contract.version}.json`,
+                  JSON.stringify(working, null, 2),
                   'application/json;charset=utf-8',
                 )
               }
@@ -56,7 +63,7 @@ export function ReportsPage() {
             <Button
               onClick={() =>
                 downloadText(
-                  `${contract.id}-${contract.version}-change-report.md`,
+                  `${working.id}-${contract.version}-change-report.md`,
                   report,
                   'text/markdown;charset=utf-8',
                 )
@@ -94,6 +101,12 @@ export function ReportsPage() {
               <Badge tone={reviewed.length === contract.changes.length ? 'green' : 'amber'}>
                 {reviewed.length === contract.changes.length ? '评审完成' : '仍有待评审项'}
               </Badge>
+              {view?.isFrozen && (
+                <Badge tone="slate">
+                  <LockKeyhole className="mr-1 h-3 w-3" />
+                  有效版本 v{view.frozenVersion}
+                </Badge>
+              )}
             </div>
           )}
         </CardContent>
@@ -193,7 +206,9 @@ export function ReportsPage() {
 
             <div className="flex items-start gap-3 rounded-md border border-slate-200 bg-white p-4 text-xs leading-5 text-slate-600">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-              报告在客户端生成，不依赖后端。正式版本冻结后仍可在历史版本页比较工作副本与发布快照。
+              {view?.isFrozen
+                ? `当前展示有效版本 v${view.frozenVersion} 的固化内容，校验值与豁免记录不可修改。`
+                : '报告在客户端生成。正式版本冻结后，页面、门禁与报告统一展示固化的有效版本。'}
             </div>
           </div>
         </div>
