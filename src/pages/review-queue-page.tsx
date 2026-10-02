@@ -2,6 +2,8 @@ import { Link } from '@tanstack/react-router';
 import { Check, CornerUpLeft, Filter, ListChecks, RotateCcw } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { CompatibilityBadge, ReviewStateBadge } from '../components/contract/compatibility-badge';
+import { ConflictDialog } from '../components/contract/conflict-dialog';
+import { PendingRecoveryBanner } from '../components/contract/pending-recovery-banner';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -19,16 +21,22 @@ import { formatDateTime } from '../lib/utils';
 import {
   CHANGE_KIND_LABELS,
   REVIEW_STATE_LABELS,
+  effectiveView,
   type ContractChange,
   type ReviewState,
 } from '../models/contract';
+import { StorageWriteError } from '../services/contract-service';
 import { useBulkReview, useContracts } from '../services/contract-queries';
+import { RevisionConflictError } from '../services/revision-control';
+import { revisionRequest } from '../services/revision-request';
 import { useReviewStore } from '../store/review-store';
 
 interface QueueItem {
   contractId: string;
   contractName: string;
   version: string;
+  revision: number;
+  frozen: boolean;
   updatedAt: string;
   change: ContractChange;
 }
@@ -45,19 +53,28 @@ export function ReviewQueuePage() {
   const [query, setQuery] = useState('');
   const [reviewer, setReviewer] = useState('当前评审人');
   const [comment, setComment] = useState('');
+  const [conflict, setConflict] = useState<{
+    revision: number;
+    basisVersion: string;
+    remote: import('../services/revision-control').RemoteFieldChange[];
+  } | null>(null);
+  const [notice, setNotice] = useState('');
 
   const queue = useMemo<QueueItem[]>(
     () =>
       (contracts.data ?? [])
-        .flatMap((contract) =>
-          contract.changes.map((change) => ({
+        .flatMap((contract) => {
+          const view = effectiveView(contract);
+          return view.changes.map((change) => ({
             contractId: contract.id,
             contractName: contract.name,
-            version: contract.version,
+            version: view.effectiveVersion,
+            revision: view.revision,
+            frozen: view.frozen,
             updatedAt: contract.updatedAt,
             change,
-          })),
-        )
+          }));
+        })
         .filter((item) => {
           const keyword = query.trim().toLowerCase();
           return (
@@ -80,13 +97,16 @@ export function ReviewQueuePage() {
     selection.map((item) => `${item.contractId}:${item.changeId}`),
   );
 
+  /** 已冻结契约中的变更不允许再评审，选择时排除 */
+  const selectableQueue = queue.filter((item) => !item.frozen);
+
   function selectAllVisible() {
-    if (queue.every((item) => selectedKeys.has(`${item.contractId}:${item.change.id}`))) {
+    if (selectableQueue.every((item) => selectedKeys.has(`${item.contractId}:${item.change.id}`))) {
       selectMany([]);
       return;
     }
     selectMany(
-      queue.map((item) => ({
+      selectableQueue.map((item) => ({
         contractId: item.contractId,
         changeId: item.change.id,
       })),
@@ -95,27 +115,81 @@ export function ReviewQueuePage() {
 
   async function submitBulk(state: ReviewState) {
     if (!selection.length || !comment.trim()) return;
-    await bulkReview.mutateAsync({
-      selections: selection,
-      state,
-      reviewer: reviewer.trim() || '当前评审人',
-      comment: comment.trim(),
-    });
-    clearSelection();
-    setComment('');
+    setNotice('');
+    // 提交坐标取自当前已加载数据：另一个窗口保存后，revision 会与之不一致而被拒绝
+    const bases = Object.fromEntries(
+      (contracts.data ?? []).map((contract) => [
+        contract.id,
+        { revision: contract.revision, basisVersion: contract.basisVersion },
+      ]),
+    );
+    try {
+      await bulkReview.mutateAsync({
+        selections: selection,
+        state,
+        reviewer: reviewer.trim() || '当前评审人',
+        comment: comment.trim(),
+        bases,
+        request: revisionRequest(
+          // 批量操作跨契约；服务端逐契约校验，这里给出首个选中契约坐标仅用于 operationId
+          { revision: -1, basisVersion: '' },
+          'bulk-review',
+          reviewer.trim() || '当前评审人',
+        ),
+      });
+      clearSelection();
+      setComment('');
+    } catch (error) {
+      if (error instanceof RevisionConflictError) {
+        setConflict({
+          revision: error.currentRevision,
+          basisVersion: error.currentBasisVersion,
+          remote: error.remoteChanges,
+        });
+      } else if (error instanceof StorageWriteError) {
+        setNotice('写入失败，批量评审批次已保留，可重试，结论不会重复写入。');
+      } else {
+        setNotice(error instanceof Error ? error.message : '批量评审失败');
+      }
+    }
   }
 
   return (
     <div>
+      <PendingRecoveryBanner />
+      {conflict && (
+        <ConflictDialog
+          open
+          currentRevision={conflict.revision}
+          currentBasisVersion={conflict.basisVersion}
+          remoteChanges={conflict.remote}
+          onRefresh={() => {
+            setConflict(null);
+            void contracts.refetch();
+          }}
+          onMerge={() => {
+            setConflict(null);
+            void contracts.refetch();
+            clearSelection();
+            setNotice('已载入最新修订，请重新勾选并基于对方结论评审。');
+          }}
+        />
+      )}
       <div className="mb-6">
         <p className="text-xs font-semibold uppercase tracking-wide text-sky-800">Review Queue</p>
         <h1 className="mt-1 text-2xl font-semibold text-slate-950 sm:text-3xl">
           批量变更评审
         </h1>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-          按兼容性风险排序处理跨契约变更。批量结论会写入每个变更项，并保留评审人与意见。
+          按兼容性风险排序处理跨契约变更。批量结论按契约修订号乐观提交，冻结契约不可再评审，冲突时先看对方变更。
         </p>
       </div>
+
+      {notice && (
+        <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {notice}
+        </div>
+      )}
 
       <div className="mb-4 grid gap-4 lg:grid-cols-[1fr_340px]">
         <Card>
@@ -151,11 +225,11 @@ export function ReviewQueuePage() {
           <CardContent className="p-0">
             <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
               <Checkbox
-                checked={!!queue.length && queue.every((item) => selectedKeys.has(`${item.contractId}:${item.change.id}`))}
+                checked={!!selectableQueue.length && selectableQueue.every((item) => selectedKeys.has(`${item.contractId}:${item.change.id}`))}
                 onCheckedChange={selectAllVisible}
                 aria-label="选择当前全部"
               />
-              <span className="text-xs font-medium text-slate-600">选择当前列表</span>
+              <span className="text-xs font-medium text-slate-600">选择当前列表（已冻结项除外）</span>
               <span className="ml-auto text-xs text-slate-500">已选 {selection.length} 项</span>
             </div>
 
@@ -172,6 +246,7 @@ export function ReviewQueuePage() {
                     <Checkbox
                       className="mt-1"
                       checked={selectedKeys.has(key)}
+                      disabled={item.frozen}
                       onCheckedChange={() =>
                         toggleSelection({
                           contractId: item.contractId,
@@ -190,6 +265,8 @@ export function ReviewQueuePage() {
                           {item.contractName}
                         </Link>
                         <Badge tone="neutral">v{item.version}</Badge>
+                        <Badge tone="slate">r{item.revision}</Badge>
+                        {item.frozen && <Badge tone="blue">已冻结固化</Badge>}
                         <CompatibilityBadge value={item.change.compatibility} />
                         <ReviewStateBadge value={item.change.reviewState} />
                       </div>

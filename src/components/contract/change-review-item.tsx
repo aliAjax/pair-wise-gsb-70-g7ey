@@ -1,4 +1,4 @@
-import { Check, CornerUpLeft, Layers3, Save } from 'lucide-react';
+import { Check, CornerUpLeft, Layers3, LockKeyhole, Save } from 'lucide-react';
 import { useState } from 'react';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -12,13 +12,23 @@ import { CompatibilityBadge, ReviewStateBadge } from './compatibility-badge';
 
 interface ChangeReviewItemProps {
   change: ContractChange;
+  basisVersion: string;
+  frozen: boolean;
+  saving: boolean;
   onReview: (changeId: string, state: ReviewState, comment: string) => void;
-  onUpdate: (changeId: string, patch: Partial<ContractChange>) => void;
+  onUpdate: (
+    changeId: string,
+    baseValues: { impactStatement: string; migrationPlan: string },
+    patch: Partial<Pick<ContractChange, 'impactStatement' | 'migrationPlan'>>,
+  ) => void;
   onExemption: (changeId: string, reason: string) => void;
 }
 
 export function ChangeReviewItem({
   change,
+  basisVersion,
+  frozen,
+  saving,
   onReview,
   onUpdate,
   onExemption,
@@ -28,6 +38,13 @@ export function ChangeReviewItem({
   const [migration, setMigration] = useState(change.migrationPlan);
   const [exemptionReason, setExemptionReason] = useState('');
   const [showExemption, setShowExemption] = useState(false);
+
+  // 冲突合并后由父组件通过带修订号的 key 重挂载本组件，初始值即最新值
+
+  const baseValues = {
+    impactStatement: change.impactStatement,
+    migrationPlan: change.migrationPlan,
+  };
 
   return (
     <article className="border-b border-slate-200 px-4 py-4 last:border-0">
@@ -39,6 +56,12 @@ export function ChangeReviewItem({
             </span>
             <CompatibilityBadge value={change.compatibility} />
             <ReviewStateBadge value={change.reviewState} />
+            {frozen && (
+              <Badge tone="slate">
+                <LockKeyhole className="mr-1 h-3 w-3" />
+                已冻结固化
+              </Badge>
+            )}
           </div>
           <h3 className="mt-2 text-sm font-semibold text-slate-900">
             {CHANGE_KIND_LABELS[change.kind]}
@@ -50,6 +73,13 @@ export function ChangeReviewItem({
         <div className="text-left text-xs text-slate-500 lg:text-right">
           <div>评审人：{change.reviewer || '未指定'}</div>
           <div className="mt-1">结论：{change.reviewComment || '尚无意见'}</div>
+          <div className="mt-1 font-mono text-[10px] text-slate-400">
+            审核依据 r{change.reviewBasisRevision || '迁移补齐'} ·{' '}
+            {change.reviewBasisVersion ? `v${change.reviewBasisVersion}` : '首次发布'}
+            {basisVersion && change.reviewBasisVersion !== basisVersion && (
+              <span className="ml-1 text-amber-600">（依据非当前版本）</span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -80,6 +110,7 @@ export function ChangeReviewItem({
             </label>
             <Textarea
               value={impact}
+              disabled={frozen}
               onChange={(event) => setImpact(event.target.value)}
               placeholder="受影响调用方、版本、流量和业务影响"
             />
@@ -88,6 +119,7 @@ export function ChangeReviewItem({
             <label className="mb-1.5 block text-xs font-medium text-slate-700">迁移方案</label>
             <Textarea
               value={migration}
+              disabled={frozen}
               onChange={(event) => setMigration(event.target.value)}
               placeholder="升级顺序、兼容层范围、回滚和截止时间"
             />
@@ -95,61 +127,76 @@ export function ChangeReviewItem({
         </div>
       )}
 
-      <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 xl:flex-row xl:items-end">
-        <div className="min-w-0 flex-1">
-          <label className="mb-1.5 block text-xs font-medium text-slate-700">评审意见</label>
-          <Textarea
-            className="min-h-16"
-            value={comment}
-            onChange={(event) => setComment(event.target.value)}
-            placeholder="说明接受、退回或豁免的依据"
-          />
+      {frozen ? (
+        <div className="mt-4 flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+          <LockKeyhole className="h-4 w-4" />
+          该变更已随正式版本冻结，固化的影响说明、评审结论与豁免不能再修改。
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() =>
-              onUpdate(change.id, {
-                impactStatement: impact,
-                migrationPlan: migration,
-              })
-            }
-          >
-            <Save className="h-3.5 w-3.5" />
-            保存说明
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onReview(change.id, 'returned', comment || '需要补充影响说明')}
-          >
-            <CornerUpLeft className="h-3.5 w-3.5" />
-            退回
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setShowExemption((value) => !value)}
-          >
-            <Layers3 className="h-3.5 w-3.5" />
-            申请兼容层
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => onReview(change.id, 'accepted', comment || '影响和迁移方案已确认')}
-          >
-            <Check className="h-3.5 w-3.5" />
-            接受
-          </Button>
+      ) : (
+        <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 xl:flex-row xl:items-end">
+          <div className="min-w-0 flex-1">
+            <label className="mb-1.5 block text-xs font-medium text-slate-700">评审意见</label>
+            <Textarea
+              className="min-h-16"
+              value={comment}
+              onChange={(event) => setComment(event.target.value)}
+              placeholder="说明接受、退回或豁免的依据"
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={
+                saving ||
+                (impact === change.impactStatement && migration === change.migrationPlan)
+              }
+              onClick={() =>
+                onUpdate(change.id, baseValues, {
+                  impactStatement: impact,
+                  migrationPlan: migration,
+                })
+              }
+            >
+              <Save className="h-3.5 w-3.5" />
+              {saving ? '保存中' : '保存说明'}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={saving}
+              onClick={() => onReview(change.id, 'returned', comment || '需要补充影响说明')}
+            >
+              <CornerUpLeft className="h-3.5 w-3.5" />
+              退回
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setShowExemption((value) => !value)}
+            >
+              <Layers3 className="h-3.5 w-3.5" />
+              申请兼容层
+            </Button>
+            <Button
+              size="sm"
+              disabled={saving}
+              onClick={() => onReview(change.id, 'accepted', comment || '影响和迁移方案已确认')}
+            >
+              <Check className="h-3.5 w-3.5" />
+              接受
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
-      {showExemption && (
+      {showExemption && !frozen && (
         <div className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone="blue">兼容层豁免</Badge>
-            <span className="text-xs text-blue-900">期限 30 天，发布报告保留记录</span>
+            <span className="text-xs text-blue-900">
+              期限 30 天，登记修订与依据版本会固化进发布报告
+            </span>
           </div>
           <Textarea
             className="mt-3 bg-white"
@@ -160,7 +207,7 @@ export function ChangeReviewItem({
           <div className="mt-3 flex justify-end">
             <Button
               size="sm"
-              disabled={!exemptionReason.trim()}
+              disabled={!exemptionReason.trim() || saving}
               onClick={() => {
                 onExemption(change.id, exemptionReason);
                 setExemptionReason('');

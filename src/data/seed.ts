@@ -1,4 +1,4 @@
-import type { ApiContract, ChangeKind } from '../models/contract';
+import type { ChangeKind, LegacyContract } from '../models/contract';
 import { classifyChange } from '../models/contract';
 
 function openApi(
@@ -52,8 +52,13 @@ function change(
   kind: ChangeKind,
   before: string,
   after: string,
-  overrides: Partial<Omit<ApiContract['changes'][number], 'id' | 'path' | 'method' | 'kind' | 'before' | 'after' | 'compatibility' | 'rationale'>> = {},
-): ApiContract['changes'][number] {
+  overrides: Partial<
+    Omit<
+      LegacyContract['changes'][number],
+      'id' | 'path' | 'method' | 'kind' | 'before' | 'after' | 'compatibility' | 'rationale'
+    >
+  > = {},
+): LegacyContract['changes'][number] {
   const classified = classifyChange({ kind, before, after });
   return {
     id,
@@ -112,7 +117,7 @@ const userOpenApi = openApi('用户权限 API', '1.14.0', [
   },
 ]);
 
-export const seedContracts: ApiContract[] = [
+export const seedContracts: LegacyContract[] = [
   {
     id: 'contract-order',
     name: '订单履约 API',

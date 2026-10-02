@@ -24,6 +24,10 @@ export interface ContractChange {
   reviewer: string;
   reviewComment: string;
   reviewedAt?: string;
+  /** 审核依据：本项结论/说明所基于的契约修订号 */
+  reviewBasisRevision: number;
+  /** 审核依据所对应的已冻结基础版本，未发布过则为空 */
+  reviewBasisVersion: string;
 }
 
 export interface ApiConsumer {
@@ -43,6 +47,10 @@ export interface Exemption {
   reason: string;
   approvedBy: string;
   expiresAt: string;
+  /** 登记该豁免时的契约修订号 */
+  revision: number;
+  /** 登记依据的已冻结版本 */
+  basisVersion: string;
 }
 
 export interface ContractVersion {
@@ -50,10 +58,21 @@ export interface ContractVersion {
   contractId: string;
   version: string;
   releasedAt: string;
+  /** 冻结时 OpenAPI 的校验值，冻结后不再变化 */
   checksum: string;
   notes: string;
   changeIds: string[];
   openapi: string;
+  /** 冻结时固化的工作副本修订号 */
+  frozenRevision: number;
+  /** 冻结时固化的完整变更清单（含审核依据） */
+  frozenChanges: ContractChange[];
+  /** 冻结时固化的调用方快照 */
+  frozenConsumers: ApiConsumer[];
+  /** 冻结时固化的豁免快照 */
+  frozenExemptions: Exemption[];
+  /** 快照完整性状态：历史数据校验值不匹配时标记 */
+  snapshotStatus: 'verified' | 'legacy';
 }
 
 export interface ApiContract {
@@ -70,6 +89,73 @@ export interface ApiContract {
   consumers: ApiConsumer[];
   exemptions: Exemption[];
   versions: ContractVersion[];
+  /** 工作副本单调递增修订号，每次被接受的提交 +1 */
+  revision: number;
+  /** 当前草稿所基于的已冻结版本；未发布过为空 */
+  basisVersion: string;
+  /** 修订日志，用于冲突时列出对方变更与幂等重试 */
+  revisionLog: RevisionLogEntry[];
+}
+
+/** 迁移前的旧数据形状（无修订号、无审核依据、豁免/快照缺字段） */
+export type LegacyContract = Omit<
+  ApiContract,
+  'revision' | 'basisVersion' | 'revisionLog' | 'changes' | 'exemptions' | 'versions'
+> & {
+  revision?: number;
+  basisVersion?: string;
+  revisionLog?: RevisionLogEntry[];
+  changes: Array<Omit<ContractChange, 'reviewBasisRevision' | 'reviewBasisVersion'> & {
+    reviewBasisRevision?: number;
+    reviewBasisVersion?: string;
+  }>;
+  exemptions: Array<
+    Omit<Exemption, 'revision' | 'basisVersion'> & {
+      revision?: number;
+      basisVersion?: string;
+    }
+  >;
+  versions: Array<
+    Omit<
+      ContractVersion,
+      | 'frozenRevision'
+      | 'frozenChanges'
+      | 'frozenConsumers'
+      | 'frozenExemptions'
+      | 'snapshotStatus'
+    > &
+      Partial<
+        Pick<
+          ContractVersion,
+          | 'frozenRevision'
+          | 'frozenChanges'
+          | 'frozenConsumers'
+          | 'frozenExemptions'
+          | 'snapshotStatus'
+        >
+      >
+  >;
+};
+
+/** 修订日志中的一次可接受提交 */
+export interface RevisionLogEntry {
+  revision: number;
+  action:
+    | 'save_fields'
+    | 'update_openapi'
+    | 'review'
+    | 'bulk_review'
+    | 'exemption'
+    | 'freeze'
+    | 'new_draft'
+    | 'import'
+    | 'migration';
+  author: string;
+  at: string;
+  summary: string;
+  changeIds: string[];
+  basisVersion: string;
+  operationId: string;
 }
 
 export interface ReleaseIssue {
@@ -109,6 +195,85 @@ export const CONTRACT_STATUS_LABELS: Record<ContractStatus, string> = {
   released: '已发布',
   frozen: '已冻结',
 };
+
+export const REVISION_ACTION_LABELS: Record<RevisionLogEntry['action'], string> = {
+  save_fields: '保存影响/迁移说明',
+  update_openapi: '编辑契约定义',
+  review: '提交评审结论',
+  bulk_review: '批量评审',
+  exemption: '登记兼容层豁免',
+  freeze: '冻结正式版本',
+  new_draft: '基于冻结版本新建草稿',
+  import: '导入契约',
+  migration: '旧数据迁移',
+};
+
+/** 页面、发布门禁与变更报告统一使用的“有效版本”视图 */
+export interface EffectiveVersionView {
+  contract: ApiContract;
+  /** 有效版本号：已冻结取冻结快照，否则取工作副本 version */
+  effectiveVersion: string;
+  revision: number;
+  basisVersion: string;
+  checksum: string;
+  frozen: boolean;
+  frozenVersion?: ContractVersion;
+  changes: ContractChange[];
+  consumers: ApiConsumer[];
+  exemptions: Exemption[];
+  openapi: string;
+}
+
+export function latestFrozenVersion(contract: ApiContract): ContractVersion | undefined {
+  return contract.versions[0];
+}
+
+/**
+ * 返回当前唯一有效版本视图：
+ * - 已冻结契约：冻结时固化的变更、调用方、豁免、校验值；
+ * - 其他状态：当前修订的工作副本。
+ */
+export function effectiveView(contract: ApiContract): EffectiveVersionView {
+  const frozen = latestFrozenVersion(contract);
+  if (contract.status === 'frozen' && frozen) {
+    return {
+      contract,
+      effectiveVersion: frozen.version,
+      revision: frozen.frozenRevision,
+      basisVersion: contract.basisVersion,
+      checksum: frozen.checksum,
+      frozen: true,
+      frozenVersion: frozen,
+      changes: frozen.frozenChanges,
+      consumers: frozen.frozenConsumers,
+      exemptions: frozen.frozenExemptions,
+      openapi: frozen.openapi,
+    };
+  }
+  return {
+    contract,
+    effectiveVersion: contract.version,
+    revision: contract.revision,
+    basisVersion: contract.basisVersion,
+    checksum: stableChecksumOfView(contract.openapi, contract.revision),
+    frozen: false,
+    changes: contract.changes,
+    consumers: contract.consumers,
+    exemptions: contract.exemptions,
+    openapi: contract.openapi,
+  };
+}
+
+/** 工作副本校验值同时包含修订号，防止旧草稿冒充冻结快照 */
+export function stableChecksumOfView(openapi: string, revision: number): string {
+  let hash = 0;
+  const input = `rev:${revision}\n${openapi}`;
+  for (let index = 0; index < input.length; index += 1) {
+    hash = (hash << 5) - hash + input.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(16).padStart(8, '0');
+}
 
 export function classifyChange(input: {
   kind: ChangeKind;
@@ -161,9 +326,11 @@ export function classifyChange(input: {
   }
 }
 
-export function validateForRelease(contract: ApiContract): ReleaseIssue[] {
+/** 发布门禁基于有效版本视图计算，冻结后的旧草稿无法再过门禁 */
+export function validateForRelease(view: EffectiveVersionView): ReleaseIssue[] {
   const issues: ReleaseIssue[] = [];
-  const pending = contract.changes.filter((change) => change.reviewState === 'pending');
+  const { changes, exemptions } = view;
+  const pending = changes.filter((change) => change.reviewState === 'pending');
   pending.forEach((change) => {
     issues.push({
       id: `pending-${change.id}`,
@@ -174,7 +341,7 @@ export function validateForRelease(contract: ApiContract): ReleaseIssue[] {
     });
   });
 
-  contract.changes
+  changes
     .filter((change) => change.reviewState !== 'exemption')
     .forEach((change) => {
       if (change.compatibility === 'compatible') {
@@ -200,12 +367,12 @@ export function validateForRelease(contract: ApiContract): ReleaseIssue[] {
       }
     });
 
-  contract.changes
+  changes
     .filter(
       (change) =>
         change.compatibility === 'breaking' &&
         change.reviewState === 'accepted' &&
-        !contract.exemptions.some((item) => item.changeId === change.id),
+        !exemptions.some((item) => item.changeId === change.id),
     )
     .forEach((change) => {
       issues.push({

@@ -37,6 +37,7 @@ import {
   type ContractStatus,
 } from '../models/contract';
 import { useContracts, useSaveContract } from '../services/contract-queries';
+import { PendingRecoveryBanner } from '../components/contract/pending-recovery-banner';
 
 type StatusFilter = ContractStatus | 'all';
 
@@ -97,7 +98,10 @@ export function DashboardPage() {
         throw new Error('OpenAPI 文档缺少 info.title');
       }
       const now = new Date().toISOString();
-      const contract: ApiContract = {
+      const contract: Omit<
+        ApiContract,
+        'revision' | 'basisVersion' | 'revisionLog'
+      > = {
         id: `contract-${Date.now()}`,
         name: parsed.info.title,
         version: parsed.info.version ?? '0.1.0',
@@ -123,6 +127,7 @@ export function DashboardPage() {
 
   return (
     <div>
+      <PendingRecoveryBanner />
       <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-sky-800">
